@@ -1,6 +1,3 @@
 {
-  "buildCommand": "cd labula-app && npm install && npm run build",
-  "outputDirectory": "labula-app/dist",
-  "framework": "vite",
-  "installCommand": "cd labula-app && npm install"
+  "rootDirectory": "labula-app"
 }
