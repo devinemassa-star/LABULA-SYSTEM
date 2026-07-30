@@ -1,0 +1,9 @@
+{
+  "name": "labula-root",
+  "private": true,
+  "scripts": {
+    "build": "cd labula-app && npm install && npm run build",
+    "dev": "cd labula-app && npm run dev",
+    "install": "cd labula-app && npm install"
+  }
+}
