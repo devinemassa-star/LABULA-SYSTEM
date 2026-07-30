@@ -26,9 +26,8 @@
 
 // ==================== CALIBRATION ====================
 const int GAS_THRESHOLD = 1500;
-const unsigned long SEND_INTERVAL = 2000;
+const unsigned long SEND_INTERVAL = 5000;
 const unsigned long DEBOUNCE_DELAY = 50;
-const unsigned long FIREBASE_RETRY_DELAY = 5000;
 
 // ==================== GLOBAL OBJECTS ====================
 Servo ventServo;
@@ -41,110 +40,17 @@ int gasValue = 0;
 bool manualOverride = false;
 bool lastSwitchReading = false;
 bool remoteManualOverride = false;
+bool remoteFanOn = false;
+bool remoteVentOpen = false;
 bool firebaseConnected = false;
 String currentStatus = "NORMAL";
 unsigned long lastSendTime = 0;
 unsigned long lastDebounceTime = 0;
-unsigned long lastFirebaseCheck = 0;
-
-// ==================== FIREBASE HELPERS ====================
-bool ensureFirebaseReady() {
-  if (firebaseConnected && Firebase.ready()) {
-    return true;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("❌ WiFi not connected");
-    return false;
-  }
-
-  Serial.print("🔄 Connecting to Firebase");
-  config.host = FIREBASE_HOST;
-  config.signer.tokens.legacy_token = FIREBASE_TOKEN;
-  config.api_key = WEB_API_KEY;
-
-  Firebase.reconnectWiFi(true);
-  fbdo.setResponseSize(4096);
-
-  Firebase.begin(&config, &auth);
-  if (Firebase.ready()) {
-    firebaseConnected = true;
-    Serial.println(" ✅");
-    return true;
-  } else {
-    Serial.printf(" ❌ (%s)\n", fbdo.errorReason().c_str());
-    firebaseConnected = false;
-    return false;
-  }
-}
-
-bool readBoolFromFirebase(const String &path, bool defaultValue) {
-  if (!ensureFirebaseReady()) {
-    return defaultValue;
-  }
-
-  if (!Firebase.RTDB.get(&fbdo, path)) {
-    Serial.printf("⚠️ Read failed %s: %s\n", path.c_str(), fbdo.errorReason().c_str());
-    firebaseConnected = false;
-    return defaultValue;
-  }
-
-  if (fbdo.dataType() == "boolean") {
-    return fbdo.boolData();
-  }
-
-  if (fbdo.dataType() == "string") {
-    String value = fbdo.stringData();
-    value.toLowerCase();
-    return value == "true" || value == "1";
-  }
-
-  return defaultValue;
-}
-
-bool writeToFirebase(const String &path, bool value) {
-  if (!ensureFirebaseReady()) {
-    return false;
-  }
-
-  if (!Firebase.RTDB.setBool(&fbdo, path, value)) {
-    Serial.printf("⚠️ Write failed %s: %s\n", path.c_str(), fbdo.errorReason().c_str());
-    firebaseConnected = false;
-    return false;
-  }
-  return true;
-}
-
-bool writeToFirebase(const String &path, int value) {
-  if (!ensureFirebaseReady()) {
-    return false;
-  }
-
-  if (!Firebase.RTDB.setInt(&fbdo, path, value)) {
-    Serial.printf("⚠️ Write failed %s: %s\n", path.c_str(), fbdo.errorReason().c_str());
-    firebaseConnected = false;
-    return false;
-  }
-  return true;
-}
-
-bool writeToFirebase(const String &path, const String &value) {
-  if (!ensureFirebaseReady()) {
-    return false;
-  }
-
-  if (!Firebase.RTDB.setString(&fbdo, path, value)) {
-    Serial.printf("⚠️ Write failed %s: %s\n", path.c_str(), fbdo.errorReason().c_str());
-    firebaseConnected = false;
-    return false;
-  }
-  return true;
-}
 
 // ==================== OUTPUT CONTROL ====================
 void applyOutputs(bool gasAlarm, bool localOverride, bool remoteOverride, bool remoteFan, bool remoteVent) {
-  bool fanOn = gasAlarm || localOverride || remoteOverride || remoteFan;
-  bool ventOpen = gasAlarm || localOverride || remoteOverride || remoteVent;
+  bool fanOn = remoteFan || gasAlarm || localOverride || remoteOverride;
+  bool ventOpen = remoteVent || gasAlarm || localOverride || remoteOverride;
 
   digitalWrite(RELAY_PIN, fanOn ? LOW : HIGH);
   ventServo.write(ventOpen ? 180 : 0);
@@ -194,6 +100,8 @@ void setup() {
   Serial.print("📡 IP: ");
   Serial.println(WiFi.localIP());
 
+  delay(2000);
+
   // ==================== TIME SYNC ====================
   Serial.print("⏰ Syncing NTP");
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -214,9 +122,11 @@ void setup() {
   config.api_key = WEB_API_KEY;
 
   Firebase.reconnectWiFi(true);
-  fbdo.setResponseSize(4096);
+  fbdo.setResponseSize(2048);
 
   Firebase.begin(&config, &auth);
+  delay(3000);
+
   if (Firebase.ready()) {
     firebaseConnected = true;
     Serial.println(" ✅");
@@ -254,10 +164,63 @@ void loop() {
     return;
   }
 
-  // Read remote settings from Firebase (with retry)
+  // If Firebase is not connected, skip network operations
+  if (!firebaseConnected || !Firebase.ready()) {
+    static unsigned long lastFailMsg = 0;
+    if (millis() - lastFailMsg >= 5000) {
+      Serial.println("⚠️ Firebase not connected, skipping network ops...");
+      lastFailMsg = millis();
+    }
+    
+    bool gasAlarm = (gasValue >= GAS_THRESHOLD);
+    applyOutputs(gasAlarm, manualOverride, false, false, false);
+    
+    delay(100);
+    return;
+  }
+
+  // Read remote settings from Firebase
   static unsigned long lastRemoteRead = 0;
-  if (millis() - lastRemoteRead >= 1000) {
-    remoteManualOverride = readBoolFromFirebase(String(BASE_PATH) + "/control/manualOverride", false);
+  if (millis() - lastRemoteRead >= 2000) {
+    if (Firebase.RTDB.get(&fbdo, String(BASE_PATH) + "/control/manualOverride")) {
+      if (fbdo.dataType() == "boolean") {
+        remoteManualOverride = fbdo.boolData();
+      } else if (fbdo.dataType() == "string") {
+        String value = fbdo.stringData();
+        value.toLowerCase();
+        remoteManualOverride = (value == "true" || value == "1");
+      }
+    } else {
+      Serial.printf("⚠️ Read failed manualOverride: %s\n", fbdo.errorReason().c_str());
+      firebaseConnected = false;
+    }
+
+    if (Firebase.RTDB.get(&fbdo, String(BASE_PATH) + "/fanOn")) {
+      if (fbdo.dataType() == "boolean") {
+        remoteFanOn = fbdo.boolData();
+      } else if (fbdo.dataType() == "string") {
+        String value = fbdo.stringData();
+        value.toLowerCase();
+        remoteFanOn = (value == "true" || value == "1");
+      }
+    } else {
+      Serial.printf("⚠️ Read failed fanOn: %s\n", fbdo.errorReason().c_str());
+      firebaseConnected = false;
+    }
+
+    if (Firebase.RTDB.get(&fbdo, String(BASE_PATH) + "/ventOpen")) {
+      if (fbdo.dataType() == "boolean") {
+        remoteVentOpen = fbdo.boolData();
+      } else if (fbdo.dataType() == "string") {
+        String value = fbdo.stringData();
+        value.toLowerCase();
+        remoteVentOpen = (value == "true" || value == "1");
+      }
+    } else {
+      Serial.printf("⚠️ Read failed ventOpen: %s\n", fbdo.errorReason().c_str());
+      firebaseConnected = false;
+    }
+
     lastRemoteRead = millis();
   }
 
@@ -273,47 +236,52 @@ void loop() {
     currentStatus = "NORMAL";
   }
 
-  // Apply outputs (local switch AND remote control both work)
-  applyOutputs(gasAlarm, manualOverride, remoteManualOverride, false, false);
+  // Apply outputs (remote fan/vent now respected)
+  applyOutputs(gasAlarm, manualOverride, remoteManualOverride, remoteFanOn, remoteVentOpen);
 
   // Send data to Firebase periodically
   if (millis() - lastSendTime >= SEND_INTERVAL) {
     unsigned long startSend = millis();
-
     bool ok = true;
-    ok &= writeToFirebase(String(BASE_PATH) + "/gasLevel", gasValue);
-    delay(100);
-    ok &= writeToFirebase(String(BASE_PATH) + "/status", currentStatus);
-    delay(100);
-    ok &= writeToFirebase(String(BASE_PATH) + "/control/switchState", manualOverride ? "PRESSED" : "RELEASED");
-    delay(100);
+
+    ok &= Firebase.RTDB.setInt(&fbdo, String(BASE_PATH) + "/gasLevel", gasValue);
+    delay(200);
+    
+    ok &= Firebase.RTDB.setString(&fbdo, String(BASE_PATH) + "/status", currentStatus);
+    delay(200);
+    
+    ok &= Firebase.RTDB.setString(&fbdo, String(BASE_PATH) + "/control/switchState", manualOverride ? "PRESSED" : "RELEASED");
+    delay(200);
 
     bool fanState = (digitalRead(RELAY_PIN) == LOW);
     bool ventState = (ventServo.read() > 90);
 
-    ok &= writeToFirebase(String(BASE_PATH) + "/fanOn", fanState);
-    delay(100);
-    ok &= writeToFirebase(String(BASE_PATH) + "/ventOpen", ventState);
+    ok &= Firebase.RTDB.setBool(&fbdo, String(BASE_PATH) + "/fanOn", fanState);
+    delay(200);
+    
+    ok &= Firebase.RTDB.setBool(&fbdo, String(BASE_PATH) + "/ventOpen", ventState);
 
     if (ok) {
       lastSendTime = millis();
+      Serial.printf("📤 Sent to Firebase in %lums\n", millis() - startSend);
     } else {
-      Serial.println("⚠️ Some Firebase writes failed, will retry next interval");
+      Serial.println("⚠️ Firebase write failed");
+      firebaseConnected = false;
     }
-
-    Serial.printf("📤 Sent to Firebase in %lums\n", millis() - startSend);
   }
 
   // Debug output
   static unsigned long lastDebug = 0;
-  if (millis() - lastDebug >= 1000) {
-    Serial.printf("Gas: %d | Status: %s | Switch: %s | Remote: %s | Fan: %s | Vent: %s | Firebase: %s\n",
+  if (millis() - lastDebug >= 3000) {
+    Serial.printf("Gas: %d | Status: %s | Switch: %s | Remote: %s | Fan: %s | Vent: %s | rFan: %s | rVent: %s | Firebase: %s\n",
       gasValue,
       currentStatus.c_str(),
       manualOverride ? "PRESSED" : "RELEASED",
       remoteManualOverride ? "ON" : "OFF",
       digitalRead(RELAY_PIN) == LOW ? "ON" : "OFF",
       ventServo.read() > 90 ? "OPEN" : "CLOSED",
+      remoteFanOn ? "ON" : "OFF",
+      remoteVentOpen ? "OPEN" : "CLOSED",
       firebaseConnected ? "OK" : "FAIL"
     );
     lastDebug = millis();
