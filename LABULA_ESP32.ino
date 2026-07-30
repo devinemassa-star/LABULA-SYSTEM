@@ -26,9 +26,8 @@
 
 // ==================== MQ2 CALIBRATION VALUES ====================
 #define RL_VALUE 5.0                    // Load resistance in kilo ohms
-#define R0_VALUE 167.3449               // Calibrated R0 value in kilo ohms
-#define GAS_RATIO_THRESHOLD 2.0         // RS/R0 ratio below this = gas detected
-// When ratio < 2.0, gas is present. Lower ratio = higher concentration.
+#define R0_VALUE 167.3449               // YOUR CALIBRATED R0 VALUE
+#define GAS_RATIO_THRESHOLD 2.0         // RS/R0 below this = gas detected
 
 // ==================== CALIBRATION ====================
 const int GAS_THRESHOLD = 1500;
