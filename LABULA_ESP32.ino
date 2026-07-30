@@ -28,6 +28,7 @@
 const int GAS_THRESHOLD = 1500;
 const unsigned long SEND_INTERVAL = 5000;
 const unsigned long DEBOUNCE_DELAY = 50;
+const unsigned long RECONNECT_INTERVAL = 10000;
 
 // ==================== GLOBAL OBJECTS ====================
 Servo ventServo;
@@ -46,6 +47,7 @@ bool firebaseConnected = false;
 String currentStatus = "NORMAL";
 unsigned long lastSendTime = 0;
 unsigned long lastDebounceTime = 0;
+unsigned long lastReconnectAttempt = 0;
 
 // ==================== OUTPUT CONTROL ====================
 void applyOutputs(bool gasAlarm, bool localOverride, bool remoteOverride, bool remoteFan, bool remoteVent) {
@@ -56,6 +58,36 @@ void applyOutputs(bool gasAlarm, bool localOverride, bool remoteOverride, bool r
   ventServo.write(ventOpen ? 180 : 0);
   digitalWrite(LED_PIN, (gasAlarm || localOverride || remoteOverride) ? HIGH : LOW);
   digitalWrite(BUZZER_PIN, (gasAlarm || localOverride || remoteOverride) ? HIGH : LOW);
+}
+
+// ==================== FIREBASE CONNECTION ====================
+void connectFirebase() {
+  if (firebaseConnected && Firebase.ready()) {
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  Serial.print("🔄 Connecting to Firebase");
+  config.host = FIREBASE_HOST;
+  config.signer.tokens.legacy_token = FIREBASE_TOKEN;
+  config.api_key = WEB_API_KEY;
+
+  Firebase.reconnectWiFi(true);
+  fbdo.setResponseSize(2048);
+
+  Firebase.begin(&config, &auth);
+  delay(3000);
+
+  if (Firebase.ready()) {
+    firebaseConnected = true;
+    Serial.println(" ✅");
+  } else {
+    firebaseConnected = false;
+    Serial.printf(" ❌ (%s)\n", fbdo.errorReason().c_str());
+  }
 }
 
 // ==================== SETUP ====================
@@ -116,24 +148,7 @@ void setup() {
   Serial.println("\n✅ Time synced!");
 
   // ==================== FIREBASE INIT ====================
-  Serial.print("🔥 Connecting to Firebase");
-  config.host = FIREBASE_HOST;
-  config.signer.tokens.legacy_token = FIREBASE_TOKEN;
-  config.api_key = WEB_API_KEY;
-
-  Firebase.reconnectWiFi(true);
-  fbdo.setResponseSize(2048);
-
-  Firebase.begin(&config, &auth);
-  delay(3000);
-
-  if (Firebase.ready()) {
-    firebaseConnected = true;
-    Serial.println(" ✅");
-  } else {
-    Serial.printf(" ❌ (%s)\n", fbdo.errorReason().c_str());
-    Serial.println("⚠️ Will retry in loop...");
-  }
+  connectFirebase();
 
   Serial.println("✅ System Ready!\n");
   Serial.println("==================================");
@@ -164,11 +179,17 @@ void loop() {
     return;
   }
 
-  // If Firebase is not connected, skip network operations
+  // Try to reconnect Firebase every 10 seconds if disconnected
+  if (!firebaseConnected && (millis() - lastReconnectAttempt >= RECONNECT_INTERVAL)) {
+    connectFirebase();
+    lastReconnectAttempt = millis();
+  }
+
+  // If Firebase is still not connected, use local-only mode
   if (!firebaseConnected || !Firebase.ready()) {
     static unsigned long lastFailMsg = 0;
     if (millis() - lastFailMsg >= 5000) {
-      Serial.println("⚠️ Firebase not connected, skipping network ops...");
+      Serial.println("⚠️ Firebase not connected, using local mode...");
       lastFailMsg = millis();
     }
     
