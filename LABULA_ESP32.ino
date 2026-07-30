@@ -24,6 +24,12 @@
 #define LED_PIN      25
 #define SWITCH_PIN   32
 
+// ==================== MQ2 CALIBRATION VALUES ====================
+#define RL_VALUE 5.0                    // Load resistance in kilo ohms
+#define R0_VALUE 167.3449               // Calibrated R0 value in kilo ohms
+#define GAS_RATIO_THRESHOLD 2.0         // RS/R0 ratio below this = gas detected
+// When ratio < 2.0, gas is present. Lower ratio = higher concentration.
+
 // ==================== CALIBRATION ====================
 const int GAS_THRESHOLD = 1500;
 const unsigned long SEND_INTERVAL = 5000;
@@ -38,6 +44,7 @@ FirebaseConfig config;
 
 // ==================== STATE VARIABLES ====================
 int gasValue = 0;
+float rsRatio = 9.83;
 bool manualOverride = false;
 bool lastSwitchReading = false;
 bool remoteManualOverride = false;
@@ -48,6 +55,22 @@ String currentStatus = "NORMAL";
 unsigned long lastSendTime = 0;
 unsigned long lastDebounceTime = 0;
 unsigned long lastReconnectAttempt = 0;
+
+// ==================== MQ2 HELPERS ====================
+float readMQ2Resistance() {
+  int adcValue = analogRead(MQ2_PIN);
+  float voltage = adcValue * (3.3 / 4095.0);
+  
+  if (voltage <= 0.01) voltage = 0.01;
+  
+  float RS = (3.3 - voltage) / voltage * RL_VALUE;
+  return RS;
+}
+
+float readGasRatio() {
+  float RS = readMQ2Resistance();
+  return RS / R0_VALUE;
+}
 
 // ==================== OUTPUT CONTROL ====================
 void applyOutputs(bool gasAlarm, bool localOverride, bool remoteOverride, bool remoteFan, bool remoteVent) {
@@ -159,6 +182,8 @@ void setup() {
 void loop() {
   // Always read local sensors regardless of connectivity
   gasValue = analogRead(MQ2_PIN);
+  rsRatio = readGasRatio();
+  bool gasAlarm = (rsRatio < GAS_RATIO_THRESHOLD);
 
   // Read physical switch with debouncing
   bool switchReading = (digitalRead(SWITCH_PIN) == LOW);
@@ -185,7 +210,7 @@ void loop() {
     lastReconnectAttempt = millis();
   }
 
-  // If Firebase is still not connected, use local-only mode
+  // If Firebase is not connected, skip network operations but keep local control working
   if (!firebaseConnected || !Firebase.ready()) {
     static unsigned long lastFailMsg = 0;
     if (millis() - lastFailMsg >= 5000) {
@@ -193,7 +218,6 @@ void loop() {
       lastFailMsg = millis();
     }
     
-    bool gasAlarm = (gasValue >= GAS_THRESHOLD);
     applyOutputs(gasAlarm, manualOverride, false, false, false);
     
     delay(100);
@@ -245,7 +269,6 @@ void loop() {
     lastRemoteRead = millis();
   }
 
-  bool gasAlarm = (gasValue >= GAS_THRESHOLD);
   bool anyOverride = manualOverride || remoteManualOverride;
 
   // Update status
@@ -257,7 +280,7 @@ void loop() {
     currentStatus = "NORMAL";
   }
 
-  // Apply outputs (remote fan/vent now respected)
+  // Apply outputs (remote fan/vent control works)
   applyOutputs(gasAlarm, manualOverride, remoteManualOverride, remoteFanOn, remoteVentOpen);
 
   // Send data to Firebase periodically
@@ -294,8 +317,9 @@ void loop() {
   // Debug output
   static unsigned long lastDebug = 0;
   if (millis() - lastDebug >= 3000) {
-    Serial.printf("Gas: %d | Status: %s | Switch: %s | Remote: %s | Fan: %s | Vent: %s | rFan: %s | rVent: %s | Firebase: %s\n",
+    Serial.printf("Gas ADC: %d | RS/R0: %.2f | Status: %s | Switch: %s | Remote: %s | Fan: %s | Vent: %s | rFan: %s | rVent: %s | Firebase: %s\n",
       gasValue,
+      rsRatio,
       currentStatus.c_str(),
       manualOverride ? "PRESSED" : "RELEASED",
       remoteManualOverride ? "ON" : "OFF",
