@@ -18,10 +18,8 @@ function App() {
   const [togglingFan, setTogglingFan] = useState(false)
   const [togglingVent, setTogglingVent] = useState(false)
   const [connected, setConnected] = useState(false)
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [rawData, setRawData] = useState(null)
   const intervalRef = useRef(null)
-  const lastStatusRef = useRef(null)
 
   async function fetchData() {
     try {
@@ -41,72 +39,11 @@ function App() {
     }
   }
 
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) {
-      return false
-    }
-    try {
-      const registration = await navigator.serviceWorker.register('/sw.js')
-      console.log('Service Worker registered:', registration.scope)
-
-      if ('Notification' in window && Notification.permission === 'default') {
-        const permission = await Notification.requestPermission()
-        if (permission === 'granted') {
-          setNotificationsEnabled(true)
-        }
-      } else if ('Notification' in window && Notification.permission === 'granted') {
-        setNotificationsEnabled(true)
-      }
-
-      return true
-    } catch (err) {
-      console.error('Service Worker registration failed:', err)
-      return false
-    }
-  }
-
   useEffect(() => {
     fetchData()
     intervalRef.current = setInterval(fetchData, 2000)
-    registerServiceWorker()
     return () => clearInterval(intervalRef.current)
   }, [])
-
-  useEffect(() => {
-    const status = data?.status || 'UNKNOWN'
-    const gasLevel = data?.gasLevel ?? 0
-    const previousStatus = lastStatusRef.current
-
-    if (previousStatus && previousStatus !== status) {
-      if ('Notification' in window && Notification.permission === 'granted') {
-        let title = ''
-        let body = ''
-
-        if (status === 'ALARM') {
-          title = '🚨 LABULA Gas Alarm'
-          body = `Gas level critical: ${gasLevel}/4095. Fan and vent activated automatically.`
-        } else if (status === 'MANUAL_OVERRIDE') {
-          title = '🔧 LABULA Manual Override'
-          body = 'Manual override is now active. Check the app for details.'
-        } else if (status === 'NORMAL' && previousStatus !== 'NORMAL') {
-          title = '✅ LABULA Back to Normal'
-          body = 'Gas levels are normal. All systems operational.'
-        }
-
-        if (title && body) {
-          new Notification(title, {
-            body,
-            icon: '/labula.png',
-            badge: '/labula.png',
-            vibrate: [200, 100, 200],
-            requireInteraction: true,
-          })
-        }
-      }
-    }
-
-    lastStatusRef.current = status
-  }, [data])
 
   async function setManualOverride(value) {
     setToggling(true)
@@ -209,12 +146,6 @@ function App() {
             <span className="meta-item">
               <span className="meta-label">Threshold</span>
               <span className="meta-value">1500</span>
-            </span>
-            <span className="meta-item">
-              <span className="meta-label">Notifications</span>
-              <span className={`meta-value ${notificationsEnabled ? 'active' : ''}`}>
-                {notificationsEnabled ? 'Enabled' : 'Enabling...'}
-              </span>
             </span>
           </div>
         </section>
