@@ -13,8 +13,15 @@
     <link rel="apple-touch-icon" href="/labula.png" />
     <title>LABULA — Gas Monitor</title>
   </head>
-  <body>
+<body>
     <div id="root"></div>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          registrations.forEach(reg => reg.unregister());
+        });
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
-    </body>
+  </body>
 </html>
