@@ -18,10 +18,7 @@ function App() {
   const [togglingFan, setTogglingFan] = useState(false)
   const [togglingVent, setTogglingVent] = useState(false)
   const [connected, setConnected] = useState(false)
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false)
-  const [rawData, setRawData] = useState(null)
   const intervalRef = useRef(null)
-  const lastStatusRef = useRef(null)
 
   async function fetchData() {
     try {
@@ -30,7 +27,6 @@ function App() {
       if (!res.ok) throw new Error('Network response was not ok')
       const json = await res.json()
       setData(json || {})
-      setRawData(json)
       setError(null)
       setConnected(true)
       setLoading(false)
@@ -40,81 +36,6 @@ function App() {
       setLoading(false)
     }
   }
-
-  // Request notification permission
-  async function requestNotificationPermission() {
-    if (!('Notification' in window)) {
-      return
-    }
-    if (Notification.permission === 'granted') {
-      setNotificationsEnabled(true)
-      return
-    }
-    if (Notification.permission !== 'denied') {
-      try {
-        const permission = await Notification.requestPermission()
-        setNotificationsEnabled(permission === 'granted')
-      } catch (e) {
-        // Notification not supported in this context
-      }
-    }
-  }
-
-  // Send browser notification
-  function sendNotification(title, body) {
-    if (!('Notification' in window) || Notification.permission !== 'granted') {
-      return
-    }
-    try {
-      if (document.hidden) {
-        new Notification(title, {
-          body,
-          icon: '/labula.png',
-          badge: '/labula.png',
-          vibrate: [200, 100, 200],
-          requireInteraction: true,
-        })
-      }
-    } catch (e) {
-      // Notification failed silently
-    }
-  }
-
-  // Check for alarm status changes and send notifications
-  useEffect(() => {
-    const status = data?.status || 'UNKNOWN'
-    const gasLevel = data?.gasLevel ?? 0
-    const previousStatus = lastStatusRef.current
-
-// Request notification permission on first load only
-  useEffect(() => {
-    if (notificationsEnabled === false && 'Notification' in window && Notification.permission === 'default') {
-      requestNotificationPermission()
-    }
-  }, [])
-
-    // Send notification on status change
-    if (previousStatus && previousStatus !== status) {
-      if (status === 'ALARM') {
-        sendNotification(
-          '🚨 LABULA GAS ALARM',
-          `Gas level critical: ${gasLevel}/4095. Fan and vent activated automatically.`
-        )
-      } else if (status === 'MANUAL_OVERRIDE') {
-        sendNotification(
-          '🔧 LABULA Manual Override',
-          'Manual override is now active. Check the app for details.'
-        )
-      } else if (status === 'NORMAL' && previousStatus !== 'NORMAL') {
-        sendNotification(
-          '✅ LABULA Back to Normal',
-          'Gas levels are normal. All systems operational.'
-        )
-      }
-    }
-
-    lastStatusRef.current = status
-  }, [data, notificationsEnabled])
 
   useEffect(() => {
     fetchData()
@@ -224,12 +145,6 @@ function App() {
               <span className="meta-label">Threshold</span>
               <span className="meta-value">1500</span>
             </span>
-            <span className="meta-item">
-              <span className="meta-label">Notifications</span>
-              <span className={`meta-value ${notificationsEnabled ? 'active' : ''}`}>
-                {notificationsEnabled ? 'Enabled' : 'Click app to enable'}
-              </span>
-            </span>
           </div>
         </section>
 
@@ -329,19 +244,6 @@ function App() {
           </div>
           {error && <p className="error">Error: {error}</p>}
         </section>
-
-        {rawData && (
-          <section className="card meta">
-            <div className="meta-content">
-              <div className="meta-item" style={{ flex: 1 }}>
-                <span className="meta-label">Raw Firebase Data</span>
-                <pre className="meta-value" style={{ fontSize: '11px', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                  {JSON.stringify(rawData, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </section>
-        )}
       </main>
 
       <footer>
