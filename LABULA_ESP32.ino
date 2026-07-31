@@ -113,14 +113,14 @@ void calibrateSensor() {
 }
 
 // ==================== OUTPUT CONTROL ====================
-void applyOutputs(bool gasAlarm, bool localOverride, bool remoteOverride, bool remoteFan, bool remoteVent) {
-  bool fanOn = remoteFan || gasAlarm || localOverride || remoteOverride;
-  bool ventOpen = remoteVent || gasAlarm || localOverride || remoteOverride;
+void applyOutputs(bool gasAlarm, bool manualOverride, bool remoteFanOn, bool remoteVentOpen) {
+  bool fanOn = gasAlarm || (remoteFanOn && manualOverride);
+  bool ventOpen = gasAlarm || (remoteVentOpen && manualOverride);
 
   digitalWrite(RELAY_PIN, fanOn ? LOW : HIGH);
   ventServo.write(ventOpen ? 180 : 0);
-  digitalWrite(LED_PIN, (gasAlarm || localOverride || remoteOverride) ? HIGH : LOW);
-  digitalWrite(BUZZER_PIN, (gasAlarm || localOverride || remoteOverride) ? HIGH : LOW);
+  digitalWrite(LED_PIN, gasAlarm ? HIGH : LOW);
+  digitalWrite(BUZZER_PIN, gasAlarm ? HIGH : LOW);
 }
 
 // ==================== FIREBASE CONNECTION ====================
@@ -262,7 +262,7 @@ void loop() {
       lastFailMsg = millis();
     }
     
-    applyOutputs(gasAlarm, manualOverride, false, false, false);
+    applyOutputs(gasAlarm, manualOverride, false, false);
     
     delay(100);
     return;
@@ -325,7 +325,7 @@ void loop() {
   }
 
   // Apply outputs (remote fan/vent control works)
-  applyOutputs(gasAlarm, manualOverride, remoteManualOverride, remoteFanOn, remoteVentOpen);
+  applyOutputs(gasAlarm, manualOverride, remoteFanOn, remoteVentOpen);
 
   // Send data to Firebase periodically
   if (millis() - lastSendTime >= SEND_INTERVAL) {
