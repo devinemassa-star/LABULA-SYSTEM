@@ -44,7 +44,6 @@ function App() {
   // Request notification permission
   async function requestNotificationPermission() {
     if (!('Notification' in window)) {
-      alert('This browser does not support notifications')
       return
     }
     if (Notification.permission === 'granted') {
@@ -52,8 +51,12 @@ function App() {
       return
     }
     if (Notification.permission !== 'denied') {
-      const permission = await Notification.requestPermission()
-      setNotificationsEnabled(permission === 'granted')
+      try {
+        const permission = await Notification.requestPermission()
+        setNotificationsEnabled(permission === 'granted')
+      } catch (e) {
+        // Notification not supported in this context
+      }
     }
   }
 
@@ -62,14 +65,18 @@ function App() {
     if (!('Notification' in window) || Notification.permission !== 'granted') {
       return
     }
-    if (document.hidden) {
-      new Notification(title, {
-        body,
-        icon: '/labula.png',
-        badge: '/labula.png',
-        vibrate: [200, 100, 200],
-        requireInteraction: true,
-      })
+    try {
+      if (document.hidden) {
+        new Notification(title, {
+          body,
+          icon: '/labula.png',
+          badge: '/labula.png',
+          vibrate: [200, 100, 200],
+          requireInteraction: true,
+        })
+      }
+    } catch (e) {
+      // Notification failed silently
     }
   }
 
@@ -79,10 +86,12 @@ function App() {
     const gasLevel = data?.gasLevel ?? 0
     const previousStatus = lastStatusRef.current
 
-    // Request notification permission on first load
+// Request notification permission on first load only
+  useEffect(() => {
     if (notificationsEnabled === false && 'Notification' in window && Notification.permission === 'default') {
       requestNotificationPermission()
     }
+  }, [])
 
     // Send notification on status change
     if (previousStatus && previousStatus !== status) {
