@@ -26,8 +26,11 @@
 
 // ==================== MQ2 CALIBRATION VALUES ====================
 #define RL_VALUE 5.0                    // Load resistance in kilo ohms
-#define R0_VALUE 167.3449               // YOUR CALIBRATED R0 VALUE
-#define GAS_RATIO_THRESHOLD 2.0         // RS/R0 below this = gas detected
+#define R0_VALUE 167.3449               // Default R0 — auto-calibration overrides at runtime
+#define GAS_ALARM_RATIO 0.50            // RS/R0 below this = gas detected
+#define WARMUP_SECONDS 30
+#define CALIBRATION_SAMPLES 50
+#define CALIBRATION_INTERVAL 100
 
 // ==================== CALIBRATION ====================
 const int GAS_THRESHOLD = 1500;
@@ -44,12 +47,14 @@ FirebaseConfig config;
 // ==================== STATE VARIABLES ====================
 int gasValue = 0;
 float rsRatio = 9.83;
+float r0Value = R0_VALUE;
 bool manualOverride = false;
 bool lastSwitchReading = false;
 bool remoteManualOverride = false;
 bool remoteFanOn = false;
 bool remoteVentOpen = false;
 bool firebaseConnected = false;
+bool calibrationDone = false;
 String currentStatus = "NORMAL";
 unsigned long lastSendTime = 0;
 unsigned long lastDebounceTime = 0;
@@ -68,7 +73,43 @@ float readMQ2Resistance() {
 
 float readGasRatio() {
   float RS = readMQ2Resistance();
-  return RS / R0_VALUE;
+  if (r0Value <= 0) return 9.83;
+  return RS / r0Value;
+}
+
+void calibrateSensor() {
+  Serial.println("\n==================================");
+  Serial.println("🔬 AUTO-CALIBRATING SENSOR");
+  Serial.println("==================================");
+  Serial.printf("Warming up for %d seconds...\n", WARMUP_SECONDS);
+
+  for (int i = WARMUP_SECONDS; i > 0; i--) {
+    Serial.printf("  Warm-up: %d seconds remaining...\n", i);
+    delay(1000);
+  }
+
+  Serial.printf("Collecting %d calibration samples...\n", CALIBRATION_SAMPLES);
+
+  float rsSum = 0;
+  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+    float rs = readMQ2Resistance();
+    rsSum += rs;
+    if ((i + 1) % 10 == 0) {
+      Serial.printf("  Sample %d/%d — RS: %.1f kΩ\n", i + 1, CALIBRATION_SAMPLES, rs);
+    }
+    delay(CALIBRATION_INTERVAL);
+  }
+
+  float rsAverage = rsSum / CALIBRATION_SAMPLES;
+  r0Value = rsAverage / 9.83;
+
+  Serial.println("\n==================================");
+  Serial.printf("✅ Calibration complete\n");
+  Serial.printf("   R0 = %.2f kΩ\n", r0Value);
+  Serial.printf("   RS (clean air) = %.1f kΩ\n", rsAverage);
+  Serial.printf("   RS/R0 (clean air) = %.2f\n", rsAverage / r0Value);
+  Serial.printf("   Alarm triggers when RS/R0 < %.2f\n", GAS_ALARM_RATIO);
+  Serial.println("==================================\n");
 }
 
 // ==================== OUTPUT CONTROL ====================
@@ -169,6 +210,10 @@ void setup() {
   }
   Serial.println("\n✅ Time synced!");
 
+  // ==================== SENSOR CALIBRATION ====================
+  calibrateSensor();
+  calibrationDone = true;
+
   // ==================== FIREBASE INIT ====================
   connectFirebase();
 
@@ -182,7 +227,7 @@ void loop() {
   // Always read local sensors regardless of connectivity
   gasValue = analogRead(MQ2_PIN);
   rsRatio = readGasRatio();
-  bool gasAlarm = (rsRatio < GAS_RATIO_THRESHOLD);
+  bool gasAlarm = (rsRatio < GAS_ALARM_RATIO);
 
   // Read physical switch with debouncing
   bool switchReading = (digitalRead(SWITCH_PIN) == LOW);
